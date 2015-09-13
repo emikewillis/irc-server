@@ -34,9 +34,26 @@ class Server
     strs = [":localhost 001 %s :Welcome %s! %s@%s" % [target.nick,target.nick,target.username,target.host],
 	    ":localhost 002 %s :Your host is %s" % [target.nick, @hostname],
 	    ":localhost 003 %s :Server started at %s" % [target.nick, START_TIME],
-	    ":localhost 004 %s :idklol" % [target.nick]]
+	    ":localhost 004 %s :ircrby blah blah blah stuff goes here" % [target.nick],
+	    ":localhost 375 %s :--Begin MOTD" % target.nick,
+	    ":localhost 372 %s :TODO: implement custom MOTD" % target.nick,
+	    ":localhost 376 %s :--End MOTD" % target.nick,
+	    ":localhost 251 %s :There are %d users and 0 invisible on 1 servers" % [target.nick,@users.size],
+	    ":localhost 254 %s %d :channels formed" % [target.nick, @channels.size],
+	    ":localhost 255 %s :I have %s clients and 0 servers" % [target.nick,@users.size],
+	    ":localhost 265 %s :Current Local Users: -1 Max -1" % target.nick,
+	    ":localhost 266 %s :Current Gloabl Users: -1 Max -1" % target.nick]
+
     strs.each{|s| target.send_message s}
+    #motd target
     @users << target
+  end
+
+  def motd target
+    strs = [":localhost 375 %s :--Begin MOTD" % target.nick,
+	    ":localhost 372 %s :TODO: implement custom MOTD" % target.nick,
+	    ":localhost 376 %s :--End MOTD" % target.nick]
+    strs.each{|s| target.send_message s}
   end
 
   def setup_messages
@@ -46,8 +63,15 @@ class Server
     end
 
     def_message "NICK" do |args,target,text|
-      target.nick = args[0]
-      target.send_message ":localhost NICK #{target.nick}"
+      unless target.nick
+	target.nick = args[0]
+	target.send_message ":#{target.nick}@#{target.host} NICK #{target.nick}"
+      else
+	# TODO nick col check
+	oldnick = target.nick 
+	target.nick = args[0]
+	target.send_message ":#{oldnick}@#{target.host} NICK #{target.nick}"
+      end
 
     end
 
@@ -57,6 +81,10 @@ class Server
       end
 
       @channels[ args[0] ].add_user target
+      target.send_message ":#{target.nick}!#{target.username}@#{target.host} JOIN :#{args[0]}"
+      @channels[args[0]].newusr target
+      target.channels << args[0]
+      p target.channels
     end
 
     def_message "USER" do |args,target,text|
@@ -74,10 +102,17 @@ class Server
     end
 
     def_message "QUIT" do |args,target,text|
+      p text
+      target.channels.each do |c|
+	p ":#{target.nick}!#{target.nick}@#{target.host} QUIT :#{text}"
+	@channels[c].broadcast_message ":#{target.nick}!#{target.nick}@#{target.host} QUIT :#{text}"
+	#TODO remove user from channels prolly good idea 
+      end
       target.disconnect
     end
 
     def_message "PRIVMSG" do |args,target,text|
+      p text
       if args[0][0] == '#'
 	# Send to channel
 	@channels[args[0]].broadcast text, target
@@ -89,9 +124,13 @@ class Server
 
   def process_message message, sender
 
+    if message.nil?
+      return "nope"
+    end
     # May the dark lord have mercy upon he who casts the spell known as regex
     mystical_incantation = /^(?<hostname>:[^ ]+ )?(?<args>[^:]+)(?<text>$|(:[^$]+)$)/
     match = message.match mystical_incantation
+    #p match["text"]
 
     parts = match["args"].split
     
@@ -104,12 +143,13 @@ class Server
 
   class User
     attr_reader :socket,:thread, :kill
-    attr_accessor :nick, :host, :username
+    attr_accessor :nick, :host, :username, :channels
 
     def initialize socket,server
       @socket = socket
       @kill = false
       @server = server
+      @channels = []
 
       @username = ""
       get_input_threaded
@@ -140,6 +180,7 @@ class Server
 
     def send_message msg
       puts "Sending: #{msg}"
+      p (msg+"\r\n")
       @socket.write(msg+"\r\n")
     end
 
@@ -164,6 +205,18 @@ class Server
 	unless u == sender
 	  u.send_message ":#{sender.nick} PRIVMSG #{@name} :#{msg}"
 	end
+      end
+    end
+
+    def newusr sender
+      @users.each do |u|
+	u.send_message ":#{sender.nick}!#{sender.nick}@#{sender.host} JOIN #{@name}"
+      end
+    end
+
+    def broadcast_message msg
+      @users.each do |u|
+	u.send_message msg
       end
     end
   end
